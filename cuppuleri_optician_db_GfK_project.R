@@ -1,10 +1,11 @@
 # Load necessary libraries and data --------------------------------------------------------------------------------------------------------------------------------------------------------------
-
 library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(leaflet)
-library(sf) 
+library(sf)
+library(readxl)
+
 
 # Load the data
 data <- read_excel("/Users/adrianacuppuleri/Library/Mobile Documents/com~apple~CloudDocs/Bewerbung/GfK/optician_basedata.xlsx")
@@ -46,14 +47,12 @@ table(data$sc_flag)
 table(data$natchain_y)
 
 # Select relevant columns for descriptive statistics that are not geodata
-relevant_columns <- data[, c("distribution_area", "einwohner", "haushalte", "kk_summe", "kk_ew", "kk_ew_index", "natchain_y", "old", "opt_cell", "opt_focal", "poi_cell", "poi_focal","sc_flag", "young")]
+relevant_columns <- data[, c("id", "distribution_area", "einwohner", "haushalte", "kk_summe", "kk_ew", "kk_ew_index", "natchain_y", "old", "opt_cell", "opt_focal", "poi_cell", "poi_focal","sc_flag", "young")]
 
 summary(relevant_columns)
 
 
-# Select cat var and see their distribution
-table(relevant_columns$sc_flag)
-table(relevant_columns$natchain_y)
+# Select distribution_area and see their distribution
 table(relevant_columns$distribution_area)
 
 
@@ -159,7 +158,7 @@ summary(relevant_columns)
 
 ## Apply Min-Max normalization to scale variables between 0 and 1 --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Creating a ranking score + Min-Max norm
+# Creating a ranking score + Min-Max normalization
 min_max_norm <- function(x) {
   return ((x - min(x)) / (max(x) - min(x)))
 }
@@ -174,14 +173,14 @@ relevant_columns_score <- relevant_columns %>%
     poi_focal_scaled = min_max_norm(poi_focal),
     sc_flag_scaled = sc_flag * 5  # Keep the shopping center flag weighted more heavily
   ) %>%
-  mutate(score = (old / (young + 1)) + 
+  mutate(score = round((old / (young + 1)) + 
            kk_summe_scaled + 
            kk_ew_scaled + 
            (opt_cell_scaled * -2) +   # Use the scaled competition values
            (opt_focal_scaled * -2) + 
            poi_cell_scaled + poi_focal_scaled +
            sc_flag_scaled + 
-           ifelse(natchain_y == 1, 5, 2))
+           ifelse(natchain_y == 1, 5, 2), 2))
     
 summary(relevant_columns_score$score)
 
@@ -192,7 +191,7 @@ hist(relevant_columns_score$score, breaks = 20, col = "lightblue",
 
 ## how competition affects the score (opt_cell and opt_focal) --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# visualizing relationship
+# visualizing relationship between relevant columns and score
 
 # Scatter plot for competition in immediate area (opt_cell) vs. score
 ggplot(relevant_columns_score, aes(x = opt_cell, y = score)) +
@@ -239,20 +238,98 @@ ggplot(relevant_columns_score, aes(x = sc_flag_scaled, y = score)) +
   geom_smooth(method = "lm", se = FALSE, color = "black") +
   labs(title = "Proximity to Shopping Centers (sc_flag_scaled) vs. Score", x = "Scaled sc_flag", y = "Score")
 
-## multiple linear regression --------------------------------------------------------------------------------------------------------------------------------------------------------------
+## model 0: multiple linear regression --------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Multiple linear regression to assess the contribution of each factor to the score
-model <- lm(score ~ kk_summe_scaled + kk_ew_scaled + opt_cell_scaled + opt_focal_scaled + 
+mlr <- lm(score ~ kk_summe_scaled + kk_ew_scaled + opt_cell_scaled + opt_focal_scaled + 
                   poi_cell_scaled + poi_focal_scaled + sc_flag_scaled, 
             data = relevant_columns_score)
 
 # Summary of the regression model
-summary(model)
+summary(mlr)
+# Multiple R-squared:  0.6784,	Adjusted R-squared:  0.6776 
+
 
 # Load the car package to calculate Variance Inflation Factor (multicollinearity)
-install.packages("car")
-install.packages("carData")
 library(carData)
 
-vif(model)
+vif(mlr)
 
-## Group by: distribution_area --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## model 1: remove poi_focal_scaled (collinear variable) --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Multiple linear regression to assess the contribution of each factor to the score
+mlr1 <- lm(score ~ kk_summe_scaled + kk_ew_scaled + opt_cell_scaled + opt_focal_scaled + 
+            poi_cell_scaled + sc_flag_scaled, 
+          data = relevant_columns_score)
+
+# Summary of the regression model
+summary(mlr1)
+# Multiple R-squared:  0.6778,	Adjusted R-squared:  0.6771 
+
+## model 2: remove opt_focal_scaled (collinear variable) --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Multiple linear regression to assess the contribution of each factor to the score
+mlr2 <- lm(score ~ kk_summe_scaled + kk_ew_scaled + opt_cell_scaled + poi_focal_scaled + 
+             poi_cell_scaled + sc_flag_scaled, 
+           data = relevant_columns_score)
+
+# Summary of the regression model
+summary(mlr2)
+# Multiple R-squared:  0.6756,	Adjusted R-squared:  0.6749
+
+## model 3: Principal Component Analysis (PCA) on opt_focal_scaled and poi_focal_scaled) --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Perform PCA on opt_focal_scaled and poi_focal_scaled
+pca_result <- prcomp(relevant_columns_score[, c("opt_focal_scaled", "poi_focal_scaled")], scale. = TRUE)
+
+# Add the first principal component to the dataset
+relevant_columns_score$pca_focal <- pca_result$x[,1]
+
+# Update the model with the new PCA component
+model_pca <- lm(score ~ kk_summe_scaled + kk_ew_scaled + 
+                  opt_cell_scaled + pca_focal + 
+                  poi_cell_scaled + sc_flag_scaled, 
+                data = relevant_columns_score)
+
+# Summary of the model with the PCA component
+summary(model_pca)
+## Multiple R-squared:  0.6767,	Adjusted R-squared:  0.676 
+
+# Rank stores based on the score --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Ensure equal distribution of 60 stores from each region (North-East, West, South)
+top_stores <- relevant_columns_score %>%
+  group_by(distribution_area) %>%         
+  arrange(desc(score)) %>%                
+  slice_head(n = 60)                      
+
+table(top_stores$distribution_area)
+# Print the top stores
+head(top_stores)
+
+## visualization of top stores --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+#mjoin "id"                "gc_strasse"        "gc_hausnr"        "gc_plz"            "gc_ort"            "x"                "y" to relevant_columns_score
+top_stores_full <- top_stores %>%
+  left_join(data[, c("id", "gc_strasse", "gc_hausnr", "gc_plz", "gc_ort", "x", "y")], by = "id")
+
+head(top_stores_full)
+
+# Check the merged data
+head(top_stores_full)
+
+# Create a color palette based on the distribution area
+palette <- colorFactor(palette = c("red", "green", "blue"), 
+                       domain = top_stores_full$distribution_area)
+
+# Visualize the top stores with colors based on distribution area
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~gc_ort, color = ~palette(distribution_area), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette, 
+            values = top_stores_full$distribution_area, 
+            title = "Distribution Area of Top Stores")
+
+# Verify the count of selected stores per region
+table(top_stores_full$distribution_area)
