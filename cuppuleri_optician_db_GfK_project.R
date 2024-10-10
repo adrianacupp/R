@@ -255,6 +255,7 @@ library(carData)
 vif(mlr)
 
 
+
 ## model 1: remove poi_focal_scaled (collinear variable) --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Multiple linear regression to assess the contribution of each factor to the score
@@ -333,3 +334,97 @@ leaflet(top_stores_full) %>%
 
 # Verify the count of selected stores per region
 table(top_stores_full$distribution_area)
+
+# Combine the store details into a single string for the popup
+top_stores_full$popup_info <- paste(
+  "ID: ", top_stores_full$id, "<br>",
+  "Street: ", top_stores_full$gc_strasse, " ", top_stores_full$gc_hausnr, "<br>",
+  "Postcode: ", top_stores_full$gc_plz, "<br>",
+  "Municipality: ", top_stores_full$gc_ort, "<br>",
+  "Distribution Area: ", top_stores_full$distribution_area, "<br>"
+)
+
+### Map the top stores with detailed info in the popup --------------------------------------------------------------------------------------------------------------------------------------------------------------
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette(distribution_area), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette, 
+            values = top_stores_full$distribution_area, 
+            title = "Distribution Area of Top Stores")
+
+### plot the map with kk_summe and kk_ew --------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Create a color palette based on kk_summe values (total purchasing power)
+palette_kk_summe <- colorNumeric(palette = "YlOrRd", domain = top_stores_full$kk_summe)
+
+# Visualize the stores with color-coded kk_summe values
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette_kk_summe(kk_summe), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette_kk_summe, 
+            values = top_stores_full$kk_summe, 
+            title = "Total Purchasing Power (kk_summe)")
+
+# Create a color palette based on kk_ew values (purchasing power per inhabitant)
+palette_kk_ew <- colorNumeric(palette = "Blues", domain = top_stores_full$kk_ew)
+
+# Visualize the stores with color-coded kk_ew values
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette_kk_ew(kk_ew), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette_kk_ew, 
+            values = top_stores_full$kk_ew, 
+            title = "Purchasing Power per Inhabitant (kk_ew)")
+
+### plot the map with competition opt_cell, opt_focal --------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+# Create a color palette based on opt_cell values (immediate competition)
+palette_opt_cell <- colorNumeric(palette = "Reds", domain = top_stores_full$opt_cell)
+
+# Visualize the stores with color-coded opt_cell values (immediate competition)
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette_opt_cell(opt_cell), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette_opt_cell, 
+            values = top_stores_full$opt_cell, 
+            title = "Immediate Competition (opt_cell)")
+
+# Create a color palette based on opt_focal values (neighboring competition)
+palette_opt_focal <- colorNumeric(palette = "Purples", domain = top_stores_full$opt_focal)
+
+# Visualize the stores with color-coded opt_focal values (neighboring competition)
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette_opt_focal(opt_focal), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette_opt_focal, 
+            values = top_stores_full$opt_focal, 
+            title = "Neighboring Competition (opt_focal)")
+
+### all info integrated in the map --------------------------------------------------------------------------------------------------------------------------------------------------------------
+top_stores_full$popup_info <- paste(
+  "ID: ", top_stores_full$id, "<br>",
+  "Street: ", top_stores_full$gc_strasse, " ", top_stores_full$gc_hausnr, "<br>",
+  "Postcode: ", top_stores_full$gc_plz, "<br>",
+  "Municipality: ", top_stores_full$gc_ort, "<br>",
+  "Distribution Area: ", top_stores_full$distribution_area, "<br>",
+  "Purchasing Power per Inhabitant (kk_ew): ", round(top_stores_full$kk_ew, 2), "<br>",
+  "Immediate Competition (opt_cell): ", top_stores_full$opt_cell, "<br>",
+  "POIs in Neighboring Areas (poi_focal): ", top_stores_full$poi_focal, "<br>"
+)
+
+# Create a color palette based on distribution area (for marker colors)
+palette <- colorFactor(palette = c("red", "green", "blue"), 
+                       domain = top_stores_full$distribution_area)
+
+# Visualize the top stores with all the relevant information in the popup
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette(distribution_area), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette, 
+            values = top_stores_full$distribution_area, 
+            title = "Distribution Area of Top Stores")
