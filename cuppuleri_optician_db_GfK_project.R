@@ -18,6 +18,7 @@ data <- read_excel("/Users/adrianacuppuleri/Library/Mobile Documents/com~apple~C
 # Data summary
 head(data)
 dim(data)
+
 str(data)
 
 # Convert all column names to lowercase
@@ -122,6 +123,7 @@ ggplot(relevant_columns, aes(x = kk_ew)) +
        x = "Purchasing Power per Inhabitant", 
        y = "Density")
 
+
 #  competing opticians in the immediate area (opt_cell)
 ggplot(relevant_columns, aes(x = opt_cell)) +
   geom_bar(fill = "red") +
@@ -156,9 +158,9 @@ ggplot(relevant_columns, aes(x = poi_focal)) +
 summary(relevant_columns)
 
 
-## Apply Min-Max normalization to scale variables between 0 and 1 --------------------------------------------------------------------------------------------------------------------------------------------------------------
+## Creating a ranking score + Min-Max normalization --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Creating a ranking score + Min-Max normalization
+# min_max
 min_max_norm <- function(x) {
   return ((x - min(x)) / (max(x) - min(x)))
 }
@@ -188,6 +190,28 @@ summary(relevant_columns_score$score)
 hist(relevant_columns_score$score, breaks = 20, col = "lightblue", 
      main = "Distribution of Scores", xlab = "Score", ylab = "Frequency")
 
+## without penalty for the competition
+
+relevant_columns_score1 <- relevant_columns %>%
+  mutate(
+    kk_summe_scaled = min_max_norm(kk_summe),
+    kk_ew_scaled = min_max_norm(kk_ew),
+    opt_cell_scaled = min_max_norm(opt_cell),
+    opt_focal_scaled = min_max_norm(opt_focal),
+    poi_cell_scaled = min_max_norm(poi_cell),
+    poi_focal_scaled = min_max_norm(poi_focal),
+    sc_flag_scaled = sc_flag * 5  # Keep the shopping center flag weighted more heavily
+  ) %>%
+  mutate(score1 = round((old / (young + 1)) + 
+                          kk_summe_scaled + 
+                          kk_ew_scaled + 
+                          opt_cell_scaled * +   # Use the scaled competition values
+                          opt_focal_scaled + 
+                          poi_cell_scaled + poi_focal_scaled +
+                          sc_flag_scaled + 
+                          ifelse(natchain_y == 1, 5, 2), 2))
+
+summary(relevant_columns_score1$score1)
 
 ## how competition affects the score (opt_cell and opt_focal) --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -252,9 +276,19 @@ summary(mlr)
 # Load the car package to calculate Variance Inflation Factor (multicollinearity)
 library(carData)
 
-vif(mlr)
+#vif(mlr)
 
+#visualize mlr
+library(broom)
+tidy_model <- tidy(mlr)
 
+# Create a coefficient plot
+ggplot(tidy_model, aes(x = reorder(term, estimate), y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  coord_flip() +  # Flip the axes for better readability
+  labs(title = "Coefficient Plot of Multiple Linear Regression Model", x = "Variables", y = "Estimate") +
+  theme_minimal()
 
 ## model 1: remove poi_focal_scaled (collinear variable) --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -296,8 +330,75 @@ model_pca <- lm(score ~ kk_summe_scaled + kk_ew_scaled +
 summary(model_pca)
 ## Multiple R-squared:  0.6767,	Adjusted R-squared:  0.676 
 
-# Rank stores based on the score --------------------------------------------------------------------------------------------------------------------------------------------------------------
+## model 4: MLR with score1 (no penalties for competition) --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+mlr_score1 <- lm(score1 ~ kk_summe_scaled + kk_ew_scaled + opt_cell_scaled + opt_focal_scaled + 
+            poi_cell_scaled + poi_focal_scaled + sc_flag_scaled, 
+          data = relevant_columns_score1)
+
+# Summary of the regression model
+summary(mlr_score1)
+
+
+# Load necessary libraries
+library(ggplot2)
+
+# Coefficients from your model
+coefficients <- data.frame(
+  Variable = c("(Intercept)", "kk_summe_scaled", "kk_ew_scaled", "opt_cell_scaled", 
+               "opt_focal_scaled", "poi_cell_scaled", "poi_focal_scaled", "sc_flag_scaled"),
+  Estimate = c(3.56687, 0.85280, 0.34700, 1.16257, 0.53042, 2.39565, 0.99706, 1.16405)
+)
+
+# Create the coefficient plot
+ggplot(coefficients, aes(x = Estimate, y = Variable)) +
+  geom_point(size = 4) +
+  geom_segment(aes(x = 0, xend = Estimate, y = Variable, yend = Variable)) +
+  labs(title = "Coefficient Plot of MLR Model",
+       x = "Estimate", y = "Variables") +
+  theme_minimal()
+
+
+## model 5: MLR only high kk_summe and kk_ew (25%) --------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Define a threshold for the top 25% of stores based on purchasing power per inhabitant (kk_ew)
+threshold_kk_ew <- quantile(relevant_columns_score1$kk_ew, 0.75)
+
+# Filter stores with purchasing power above the threshold
+top_25_kk_stores <- relevant_columns_score1 %>%
+  filter(kk_ew >= threshold_kk_ew)
+
+#ensure top score are equally distributed among 3 areas
+top_25_kk_stores <- relevant_columns_score1 %>%
+  group_by(distribution_area) %>%         
+  arrange(desc(score1)) %>%                
+  slice_head(n = 60)
+
+# Merge the location information (x, y coordinates) with the top stores
+top_25_stores_full <- top_25_kk_stores %>%
+  left_join(data[, c("id", "gc_strasse", "gc_hausnr", "gc_plz", "gc_ort", "x", "y")], by = "id")
+
+# Create a popup for store information
+top_25_stores_full <- top_25_stores_full %>%
+  mutate(popup_info = paste0("Store: ", gc_ort, "<br>",
+                             "Address: ", gc_strasse, " ", gc_hausnr, "<br>",
+                             "Postcode: ", gc_plz, "<br>",
+                             "Purchasing Power: ", kk_ew))
+
+# Create a color palette based on the distribution area
+palette <- colorFactor(palette = c("red", "green", "blue"), 
+                       domain = top_25_stores_full$distribution_area)
+# Create the map
+leaflet(top_25_stores_full) %>%
+  addTiles() %>%  # Add default map tiles
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette(distribution_area), 
+                   radius = 5, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette, 
+            values = top_stores_full$distribution_area, 
+            title = "Distribution Area of Top Stores")
+
+# Rank stores based on the score and score1 --------------------------------------------------------------------------------------------------------------------------------------------------------------
+#score
 # Ensure equal distribution of 60 stores from each region (North-East, West, South)
 top_stores <- relevant_columns_score %>%
   group_by(distribution_area) %>%         
@@ -305,19 +406,33 @@ top_stores <- relevant_columns_score %>%
   slice_head(n = 60)                      
 
 table(top_stores$distribution_area)
+
 # Print the top stores
 head(top_stores)
+order(top_stores$score, decreasing = TRUE)
 
+#score1
+# Ensure equal distribution of 60 stores from each region (North-East, West, South)
+top_stores1 <- relevant_columns_score1 %>%
+  group_by(distribution_area) %>%         
+  arrange(desc(score1)) %>%                
+  slice_head(n = 60)                      
+
+table(top_stores1$distribution_area)
+
+# Print the top stores
+head(top_stores1)
+order(top_stores1$score1, decreasing = TRUE)
 ## visualization of top stores --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #mjoin "id"                "gc_strasse"        "gc_hausnr"        "gc_plz"            "gc_ort"            "x"                "y" to relevant_columns_score
-top_stores_full <- top_stores %>%
+top_stores_full1 <- top_stores1 %>%
   left_join(data[, c("id", "gc_strasse", "gc_hausnr", "gc_plz", "gc_ort", "x", "y")], by = "id")
 
-head(top_stores_full)
+
 
 # Check the merged data
-head(top_stores_full)
+head(top_stores_full1)
 
 # Create a color palette based on the distribution area
 palette <- colorFactor(palette = c("red", "green", "blue"), 
@@ -404,27 +519,31 @@ leaflet(top_stores_full) %>%
             values = top_stores_full$opt_focal, 
             title = "Neighboring Competition (opt_focal)")
 
-### all info integrated in the map --------------------------------------------------------------------------------------------------------------------------------------------------------------
-top_stores_full$popup_info <- paste(
-  "ID: ", top_stores_full$id, "<br>",
-  "Street: ", top_stores_full$gc_strasse, " ", top_stores_full$gc_hausnr, "<br>",
-  "Postcode: ", top_stores_full$gc_plz, "<br>",
-  "Municipality: ", top_stores_full$gc_ort, "<br>",
-  "Distribution Area: ", top_stores_full$distribution_area, "<br>",
-  "Purchasing Power per Inhabitant (kk_ew): ", round(top_stores_full$kk_ew, 2), "<br>",
-  "Immediate Competition (opt_cell): ", top_stores_full$opt_cell, "<br>",
-  "POIs in Neighboring Areas (poi_focal): ", top_stores_full$poi_focal, "<br>"
-)
+### plot map distribution of older population --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# Create a color palette based on distribution area (for marker colors)
-palette <- colorFactor(palette = c("red", "green", "blue"), 
-                       domain = top_stores_full$distribution_area)
+# Create a color palette based on the 'old' variable (percentage of older population)
+palette_old <- colorNumeric(palette = "Oranges", domain = top_stores_full$old)
 
-# Visualize the top stores with all the relevant information in the popup
+# Visualize the stores with color-coded 'old' values (percentage of older population)
 leaflet(top_stores_full) %>%
   addTiles() %>%
-  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette(distribution_area), 
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette_old(old), 
                    radius = 4, fillOpacity = 0.8) %>%
-  addLegend("bottomright", pal = palette, 
-            values = top_stores_full$distribution_area, 
-            title = "Distribution Area of Top Stores")
+  addLegend("bottomright", pal = palette_old, 
+            values = top_stores_full$old, 
+            title = "Percentage of Older Population (old)")
+
+
+### plot map with POI--------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# Create a color palette based on the 'poi_cell' variable (POIs in the immediate area) with a pink color scale
+palette_poi_pink <- colorNumeric(palette = "RdPu", domain = top_stores_full$poi_cell)
+
+# Visualize the stores with color-coded 'poi_cell' values (POIs in the immediate area)
+leaflet(top_stores_full) %>%
+  addTiles() %>%
+  addCircleMarkers(~x, ~y, popup = ~popup_info, color = ~palette_poi_pink(poi_cell), 
+                   radius = 4, fillOpacity = 0.8) %>%
+  addLegend("bottomright", pal = palette_poi_pink, 
+            values = top_stores_full$poi_cell, 
+            title = "Points of Interest (Immediate Area, poi_cell)")
